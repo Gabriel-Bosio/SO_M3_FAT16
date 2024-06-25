@@ -81,10 +81,76 @@ int wipe(FILE *fp, struct fat_dir *dir, struct fat_bpb *bpb)
     return 0;
 }
 
-void mv(FILE *fp, char *filename, struct fat_bpb *bpb)
-{
-    ;
-    ; /* TODO */
+void mv(FILE *fp, char *path, struct fat_bpb *bpb) {
+    // 1. Abrir o arquivo de origem
+    FILE *src_file = fopen(path, "rb");
+    if (!src_file) {
+        fprintf(stderr, "Erro ao abrir o arquivo de origem: %s\n", path);
+        return;
+    }
+
+    // 2. Obter o tamanho do arquivo de origem
+    fseek(src_file, 0, SEEK_END);
+    long file_size = ftell(src_file);
+    fseek(src_file, 0, SEEK_SET);
+
+    // 3. Ler o conteúdo do arquivo de origem
+    unsigned char *buffer = (unsigned char *)malloc(file_size);
+    if (!buffer) {
+        fprintf(stderr, "Erro ao alocar memória para o buffer\n");
+        fclose(src_file);
+        return;
+    }
+    fread(buffer, 1, file_size, src_file);
+
+    // 4. Fechar o arquivo de origem
+    fclose(src_file);
+
+    // 5. Encontrar um slot livre no diretório raiz do FAT16
+    struct fat_dir *dirs = ls(fp, bpb);
+    int i;
+    int free_index = -1;
+    for (i = 0; i < bpb->possible_rentries; i++) {
+        if (dirs[i].name[0] == 0x00 || dirs[i].name[0] == 0xE5) {
+            free_index = i;
+            break;
+        }
+    }
+
+    if (free_index == -1) {
+        fprintf(stderr, "Erro: Diretório raiz está cheio\n");
+        free(buffer);
+        return;
+    }
+
+    // 6. Preparar a entrada do diretório para o novo arquivo
+    struct fat_dir new_dir;
+    memset(&new_dir, 0, sizeof(struct fat_dir));
+    char *name = padding(path);
+    strncpy((char *)new_dir.name, name, 11);
+    new_dir.file_size = file_size;
+    new_dir.starting_cluster = free_index + 2;  // Assumindo que o cluster inicial está no índice livre
+
+    // 7. Escrever a entrada do diretório no FAT16
+    uint32_t dir_offset = bpb_froot_addr(bpb) + free_index * sizeof(struct fat_dir);
+    fseek(fp, dir_offset, SEEK_SET);
+    fwrite(&new_dir, sizeof(struct fat_dir), 1, fp);
+
+    // 8. Escrever os dados do arquivo no FAT16
+    uint32_t data_offset = bpb_fdata_addr(bpb) + new_dir.starting_cluster * bpb->bytes_p_sect;
+    fseek(fp, data_offset, SEEK_SET);
+    fwrite(buffer, 1, file_size, fp);
+
+    // 9. Liberar o buffer
+    free(buffer);
+
+    // 10. Remover o arquivo de origem
+    if (remove(path) != 0) {
+        fprintf(stderr, "Erro ao remover o arquivo de origem: %s\n", path);
+    }
+
+    // 11. Limpar a memória alocada para a lista de diretórios
+    free(dirs);
 }
 
 void rm(FILE *fp, char *filename, struct fat_bpb *bpb)
